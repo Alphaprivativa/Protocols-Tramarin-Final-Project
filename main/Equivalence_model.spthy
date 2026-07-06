@@ -188,7 +188,8 @@ rule Pharmacy_Computes_and_sends_Challenge[role="Pharmacy"]: // The pharmacy com
     ]
   --[
     ]->
-    [ Out(<'challenge', cipher, AP>) // We output it also in a non secure challenge in order to let the adversary know the ciphertext
+    [ Out(<'challenge', cipher, AP>)
+    ,  Out(~R)// It is given in output also in a non secure challenge in order let the adversary know the ciphertext and the handshake secret R
     , St_Pharmacy_Wait(Pharmacy, Patient, ~R, cipher, AP, data)
     ]
 
