@@ -1,0 +1,65 @@
+// From https://github.com/matteobusi/easycrypt-devcontainer/blob/main/.devcontainer/Dockerfile
+{
+  "name": "Tamarin",
+
+  // Pre-built image published to GHCR by the devcontainer-build workflow.
+  // Students get a ~30s pull instead of a 5-10 min build.
+  // To rebuild (e.g. after changing the Dockerfile), push to main — the
+  // workflow will update the image automatically.
+  "image": "ghcr.io/stefanoberlato/tamarin-devcontainer:latest",
+
+  // Uncomment this block (and remove the "image" line above) for local Dockerfile builds:
+  // "build": {
+  //   "dockerfile": "Dockerfile",
+  //   "context": ".."
+  // },
+
+  // VS Code extensions installed automatically
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // The official Visual Studio Code extension for Tamarin files (.spthy) 
+        // supported by the Tamarin team. Source: github.com/tamarin-prover/vscode-tamarin
+        "tamarin-prover.tamarin-prover",
+
+        // Quality-of-life
+        "streetsidesoftware.code-spell-checker",
+        "editorconfig.editorconfig"
+      ],
+      "settings": {
+        
+        // Associate .spthy and .splib files with Tamarin
+        "files.associations": {
+          "*.spthy": "tamarin",
+          "*.splib": "tamarin"
+        },
+
+        // Terminal: start in the workspace folder
+        "terminal.integrated.defaultProfile.linux": "bash",
+
+        // Adapt to the OS light/dark preference automatically
+        "window.autoDetectColorScheme": true,
+        "workbench.preferredDarkColorTheme": "Default Dark Modern",
+        "workbench.preferredLightColorTheme": "Default Light Modern"
+      }
+    }
+  },
+
+  // Forward the Tamarin web interface port to the host
+  "forwardPorts": [3000],
+
+  // Configure port attributes for the Tamarin web UI
+  "portsAttributes": {
+    "3000": {
+      "label": "Tamarin Web Interface",
+      "onAutoForward": "notify"
+    }
+  },
+
+  // Run as the non-root user created in the Dockerfile
+  "remoteUser": "user",
+
+  // Post-create: nothing needed.
+
+  "postStartCommand": "echo 'Tamarin environment ready. Open any .spthy file in VS Code and start modeling. To start Tamarin on a file <file_name>.spthy, run `tamarin-prover interactive <file_name>.spthy` in the terminal; then, either look at the Ports panel (bottom of VS Code) or follow the link returned in the terminal (usually, `http://127.0.0.1:3000` or `http://127.0.0.1:3001`) with CTRL+click.'"
+}

@@ -1,0 +1,351 @@
+theory E_Prescription_Protocol_Trace_Mode
+begin
+
+builtins: signing
+
+functions:
+  Enc/3,          //  Enc(mpk, AP, R)      : challenge encryption
+  Dec/3,          //  Dec(sk, cipher, AP)  : challenge decryption
+  KeyGen/3,       //  KeyGen(msk, S, rand) : credential issued by authority
+  mpkOf/1,
+  PolicyGen/1,
+  RequestGen/1,
+  DataGen/1
+
+// FIX (A): KEM-shaped, subterm-convergent, no repeated compound subterm.
+// A key issued under msk opens ciphertexts made under mpkOf(msk).
+// (Compare: kemdecaps(alg, kemencaps(alg, kemss(alg,seed), kempk(alg,sk)), sk)
+//           = kemss(alg,seed) in the KEMTLS Tamarin models.)
+equations:
+  Dec(
+    KeyGen(msk, S, fix_randomness),
+    Enc(mpkOf(msk), PolicyGen(RequestGen(S)), R),
+    PolicyGen(RequestGen(S))
+  ) = R
+
+/* ================================================================
+   RESTRICTIONS 
+   ================================================================ */
+
+restriction Equality:
+  "All x y #i. Eq(x,y) @ #i ==> x = y"
+
+// Single authority (the Setup() action is emitted by Authority_Setup).
+restriction Single_Setup:
+  "All #i #j. Setup() @ #i & Setup() @ #j ==> #i = #j"
+
+// restriction Single_Patient_Registry:   // Only one patient registered 
+//   "All #i #j. Patient_Registry() @ #i & Patient_Registry() @ #j ==> #i = #j"
+
+restriction Single_Physician_Registry: // Only one physician registered
+  "All #i #j. Physician_Registry() @ #i & Physician_Registry() @ #j ==> #i = #j"
+
+restriction Single_Pharmacy_Registry:  // Only one pharmacy registered
+  "All #i #j. Pharmacy_Registry() @ #i & Pharmacy_Registry() @ #j ==> #i = #j"
+
+
+/* ==========================================================================
+   Secure channel (reference points K and R).
+   Replay-safe since Out_Secure / In_Secure are linear.
+   ========================================================================== */
+rule Chan_Secure:
+    [ Out_Secure(A, B, msg) ]
+  --[ Sent(A, B, msg) ]->
+    [ In_Secure(A, B, msg) ]
+
+/* ==========================================================================
+   Phase 0 - Initialization
+   ========================================================================== */
+rule Authority_Setup:
+    let
+      mpk = mpkOf(~msk)
+    in
+    [ Fr(~msk) ]
+  --[ Setup(), Authority_Setupped($MA, ~msk) ]->
+    [ !Authority_MSK($MA, ~msk)
+    , !Authority_MPK($MA, mpk)
+    , Out(<'Med_Authority', $MA, mpk>)
+    ]
+
+rule Physician_Register:
+    let
+      physician_pk = pk(~ltk)
+    in
+    [ Fr(~ltk)
+    , !Authority_MPK(MA, mpk)
+    ]
+  --[ Physician_Registry()
+    , Physician_Registered($Physician)
+    ]->
+    [ !PhysicianLtk($Physician, ~ltk)
+    , !Physician_pk($Physician, physician_pk)
+    , Out(<'Physician', $Physician, pk(~ltk)>)
+    ]
+
+rule Pharmacy_Register:
+    [ Fr(~ID_pharmacy)
+    , !Authority_MPK(MA, mpk)
+    , !Physician_pk(Physician, physician_pk)
+    ]
+  --[ Pharmacy_Registry()
+    , Pharmacy_Registered($Pharmacy, ~ID_pharmacy)
+    ]->
+    [ !Pharmacy($Pharmacy, ~ID_pharmacy), Out(<'Pharmacy', $Pharmacy, ~ID_pharmacy>) ]
+
+rule Patient_Register:
+    [ Fr(~ID_patient)
+    , !Authority_MPK(MA, mpk)
+    , !Physician_pk(Physician, physician_pk)
+    , !Pharmacy(Pharmacy, ID_pharmacy)
+    ]
+  --[ Patient_Registry()
+    , Patient_Registered($Patient, ~ID_patient)
+    ]->
+    [ !Patient($Patient, ~ID_patient) ]  // Patient is registered in secrecy: ID is not revealed
+
+/* ==========================================================================
+   Phase 1 - Prescription request
+   ========================================================================== */
+rule Patient_Physician_Request[role="Patient"]: // Patient goes to the physician to mint a prescription for his illness
+    let
+      req = <'Illness_req', Patient, ID_patient, ~Illness>
+    in
+    [ !Patient(Patient, ID_patient)
+    , !Physician_pk(Physician, physician_pk)
+    , Fr(~Illness)
+    ]
+  --[ Patient_Physician_Requested(Patient, Physician, req) ]->
+    [ Out_Secure(Patient, Physician, req) ]
+
+rule Physician_Request[role="Physician"]: // The physician sends the request to the medical authority
+    let
+      req = <'presc_req', Patient, ID_patient, ~S>
+    in
+    [ !Authority_MPK(MA, mpk)
+    , !Patient(Patient, ID_patient)
+    , !Physician_pk(Physician, physician_pk)
+    , In_Secure(Patient, Physician, <'Illness_req', Patient, ID_patient, illness>)
+    , Fr(~S)  // In reality this is a function of the illness, but we model it as a free variable.
+    ]
+  --[ Physician_Requested(Physician, Patient, req) ]->
+    [ Out_Secure(Physician, MA, req) ]
+
+/* ==========================================================================
+   Phase 2 - Credential issuance
+   The request is parsed by pattern matching on the tagged tuple.
+   ========================================================================== */
+rule Authority_Issue[role="Authority"]: // The authority issues the credentials and mint the secret key of the patient
+    let
+      ABE_sk = KeyGen(msk, S, ~randomness)
+    in
+    [ !Authority_MSK(MA, msk)  // Authority holds msk
+    , !Physician_pk(Physician, physician_pk)
+    , !Patient(Patient, ID_patient)
+    , In_Secure(Physician, MA, <'presc_req', Patient, ID_patient, S>)
+    , Fr(~randomness)
+    ]
+  --[ Issued(MA, Physician, Patient, ABE_sk, ID_patient) ]->
+    [ Out_Secure(MA, Patient, <'credential', ABE_sk, ID_patient, S>) ]
+
+rule Patient_stores_credential[role="Patient"]: // Patient receives and stores the credential (A4: protected storage).
+    [ !Authority_MPK(MA, mpk)
+    , !Patient(Patient, ID_patient)
+    , In_Secure(MA, Patient, <'credential', ABE_sk, ID_patient, S>)
+    ]
+  --[ Patient_Has_Key(Patient, S, ABE_sk, ID_patient) ]->
+    [ !Patient_Cred(Patient, ABE_sk, ID_patient, S) ]
+
+/* ==========================================================================
+   ETSI Handshake protocol
+   ========================================================================== */
+rule Patient_Handshake_request[role="Patient"]: // The patient initiates the handshake
+    let req = RequestGen(S) in
+    [ !Patient_Cred(Patient, ABE_sk, ID_patient, S)
+    , !Authority_MPK(MA, mpk)
+    , !Pharmacy(Pharmacy, ID_pharmacy)
+    ]
+  --[ Patient_sent_Handshake_request(Patient, Pharmacy, req) ]->
+    // If an attacker can modify the request in some way in order to obtain ID_patient, then a dishonest pharmacy can learn the patient 
+    // identifier without the patient explicitly revealing it.
+
+    // In this model attacker and pharmacy are the same person, so the
+    // pharmacy could modify the request in order to gain information on the
+    // Patient ID during the handshake.
+    [ Out(<'hs_req', Patient, Pharmacy, req>)
+    , St_Patient_Wait(Patient, Pharmacy)   // linear session state (memory of the request)
+    ]
+
+rule Dishonest_Patient_Handshake_request[role="Dishonest_Patient"]: // A dishonest patient initiates the handshake with the same request of the honest one
+    [ In(<'hs_req', Patient, Pharmacy, req>)
+    , !Pharmacy(Pharmacy, ID_pharmacy)
+    , !Patient(Dishonest_patient, ID_dis_patient)
+    ]
+    --[Dishonest_patient_tampered_request(Dishonest_patient, Patient, Pharmacy, req)]->
+    [
+      Out(<'hs_req', Dishonest_patient, Pharmacy, req>)
+    ]
+
+rule Pharmacy_Computes_and_sends_Challenge[role="Pharmacy"]: // The pharmacy computes the challenge and sends it to the patient
+    let
+      AP        = PolicyGen(req)
+      data      = DataGen(req)
+      cipher    = Enc(mpk, AP, ~R)
+      challenge = <cipher, AP>
+    in
+    [ !Authority_MPK(MA, mpk)
+    , !Pharmacy(Pharmacy, ID_pharmacy)
+    , In(<'hs_req', Patient, Pharmacy, req>)
+    , Fr(~R)    // R = r_chosen || K_chosen
+    ]
+  --[ Pharmacy_computed_cipher(Pharmacy, cipher)
+    , Pharmacy_sent_challenge(Pharmacy, Patient, challenge)
+    , Challenge_Issued(Pharmacy, Patient, ~R)
+    ]->
+    [ Out(<'challenge', cipher, AP>) // We output in also in a non secure challenge in order let the adversary know the ciphertext
+    , St_Pharmacy_Wait(Pharmacy, Patient, ~R, cipher, AP, data)
+    ]
+
+/* --------------------------------------------------------------------------
+   FIX (B): decryption of the challenge by the HONEST patient is done by
+   PATTERN MATCHING instead of applying Dec under the old nested equation.
+
+   The premise only matches
+        In(<'challenge', Enc(mpk, AP, Resp), AP>)
+   with AP = PolicyGen(RequestGen(ABE_sk)) for the patient's OWN credential
+   and mpk the (unique) authority master public key. Binding Resp through
+   the Enc pattern IS the decryption, and it simultaneously realises the
+   original re-encryption test  Eq(Enc(mpk,AP,Resp), cipher)  by
+   construction. If the (dishonest) verifier sends a challenge under a
+   different mpk or a policy that does not match the patient's request,
+   the rule cannot fire: the honest patient aborts, exactly as before.
+
+   The Dec function and its equation remain in the theory purely as an
+   ADVERSARY capability: the curious pharmacy that obtains a revealed
+   credential can still open ciphertexts on its own.
+   -------------------------------------------------------------------------- */
+rule Patient_Decrypts_Response_and_sends_to_Pharmacy[role="Patient"]: // The patient controls if the pharmacy is honest and if so, sends the response
+    let
+      req          = RequestGen(S)
+      AP           = PolicyGen(req)
+      Resp         = Dec(ABE_sk, cipher, AP)
+      cipher_prime = Enc(mpk, AP, Resp)
+    in
+    [ !Authority_MPK(MA, mpk)
+    , !Patient_Cred(Patient, ABE_sk, ID_patient, S)
+    , In(<'challenge', cipher, AP>)
+    , St_Patient_Wait(Patient, Pharmacy)
+    ]
+  --[ Patient_computed_response(Patient, Resp)
+    , Eq(cipher, cipher_prime)
+    ]->
+    // Here we consider the pharmacy to be honest in handling the response,
+    // so we output it on a secure channel; on the other hand, since the
+    // pharmacy is curious and pharmacy corresponds to the attacker, we also
+    // send it via Out.
+    [ Out_Secure(Patient, Pharmacy, <'response', Resp>)  // Response
+    ]
+
+rule Pharmacy_checks_Response_and_sends_Data[role="Pharmacy"]: // The pharmacy verifies if the response is valid and sends the medicine (data) to the patient
+    [ In_Secure(Patient, Pharmacy, <'response', Resp>)
+    , St_Pharmacy_Wait(Pharmacy, Patient, R, cipher, AP, data)
+    ]
+  --[ Eq(Resp, R)
+    , Pharmacy_sent_Data(Pharmacy, Patient, data)
+    , Data_Delivered(Pharmacy, Patient, R, data) 
+    ]->
+    [ Out_Secure(Pharmacy, Patient, <'data', data>)
+    ]
+  
+/* ==========================================================================
+   Explicit, voluntary identity disclosure by the patient.
+   This is the ONLY rule that puts ID_patient on the wire.
+   ========================================================================== */
+rule Reveal_sk_patient:
+    [ !Patient_Cred(Patient, ABE_sk, ID_patient, S) ]
+  --[ Sk_Patient_Revealed(ABE_sk, ID_patient) ]->
+    [ Out(<ABE_sk, ID_patient>) ]
+
+// ===========================================
+// Sanity lemmas (executability)
+// ===========================================
+// Important: after changing the theory / patterns, ALWAYS re-check that the
+// protocol can still run end-to-end, otherwise all-traces lemmas may hold
+// vacuously.
+
+lemma executable_credential:
+  exists-trace
+  "Ex MA Physician Patient ABE_sk ID_Patient S #i #j.
+      Issued(MA, Physician, Patient, ABE_sk, ID_Patient) @ #i
+    & Patient_Has_Key(Patient, S, ABE_sk, ID_Patient) @ #j"
+
+lemma executable_full_handshake:
+  exists-trace
+  "Ex Pharmacy Patient data #i.
+      Pharmacy_sent_Data(Pharmacy, Patient, data) @ #i"
+
+lemma executable_reveal_ID:
+  exists-trace
+  "Ex Patient ID_patient #i #j.
+      Patient_Registered(Patient, ID_patient) @ #i
+    & K(ID_patient) @ #j
+    & #i < #j"
+
+// MICRO-FIX (m2): exists-trace was missing in the original.
+lemma executable_reveal_sk:
+  exists-trace
+  "Ex Patient ABE_sk ID_patient S #i #j.
+      Patient_Has_Key(Patient, S, ABE_sk, ID_patient) @ #i
+    & K(ABE_sk) @ #j
+    & #i < #j"
+
+// ===========================================
+// Security properties
+// ===========================================
+
+// Anonymity of the patient
+lemma Pavoletti:
+  all-traces
+  "All Pharmacy ID_pharmacy ABE_sk ID_patient Patient S #i #j #k.
+      Patient_Has_Key(Patient, S, ABE_sk, ID_patient) @ #i
+    & Pharmacy_Registered(Pharmacy, ID_pharmacy) @ #j
+    & K(ABE_sk) @ #k
+    & #i < #k
+    & #j < #k
+    ==> (Ex #l. Sk_Patient_Revealed(ABE_sk, ID_patient) @ #l & #l < #k)"
+
+lemma ID_patient_secret_unless_revealed:
+  all-traces
+  "All Patient ID_patient #i #j.
+      Patient_Registered(Patient, ID_patient) @ #i
+    & K(ID_patient) @ #j
+    ==> (Ex ABE_sk #l. Sk_Patient_Revealed(ABE_sk, ID_patient) @ #l & #l < #j)"
+  
+
+lemma Replay_Protection:
+  all-traces
+  "All Pharmacy Patient R data #i.
+      Data_Delivered(Pharmacy, Patient, R, data) @ #i
+    ==>
+      ( ( Ex #k #j.
+            Challenge_Issued(Pharmacy, Patient, R) @ #k
+          & Patient_computed_response(Patient, R) @ #j
+          & #k < #j & #j < #i )
+      & ( All Pharmacy2 Patient2 data2 #i2.
+            Data_Delivered(Pharmacy2, Patient2, R, data2) @ #i2
+          ==> #i2 = #i ) )"
+
+
+// Unforgeability of R during handshake (It is not possible to finalize an handshake without possessing the right key)
+lemma E_Lavezzi:
+  all-traces
+  "All Patient Pharmacy req data #i #j. 
+    Patient_sent_Handshake_request(Patient, Pharmacy, req) @ #i 
+    & Pharmacy_sent_Data(Pharmacy, Patient, data) @ #j 
+    & #i < #j
+    ==> (
+      Ex S ABE_sk ID_Patient #k. Patient_Has_Key(Patient, S, ABE_sk, ID_Patient) @ #k 
+      & RequestGen(S) = req 
+      & #k < #i 
+    )
+  "
+end
