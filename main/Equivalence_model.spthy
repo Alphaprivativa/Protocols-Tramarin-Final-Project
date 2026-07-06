@@ -1,3 +1,7 @@
+// In this file is proven the unlinkability (S3) of two different patients that hold the same valid attributes for a given prescription.
+// In this scenario the attacker (the pharmacy) can not distinguish between the two patients.
+// The events-trace is empty, in this way Tamarin adversary can not gain any information about the protocol and the handshake.
+
 theory E_Prescription_Protocol_Observational_Equivalence_Mode
 begin
 
@@ -7,15 +11,12 @@ functions:
   Enc/3,          //  Enc(mpk, AP, R)      : challenge encryption
   Dec/3,          //  Dec(sk, cipher, AP)  : challenge decryption
   KeyGen/3,       //  KeyGen(msk, S, rand) : credential issued by authority
-  mpkOf/1,
-  PolicyGen/1,
-  RequestGen/1,
-  DataGen/1
+  mpkOf/1,        // mpkOf(msk) : mpk generated from msk
+  PolicyGen/1,    // PolicyGen(request) : the policy is generated from the patient's request.
+  RequestGen/1,   // RequestGen(S) : the patient's request depends on his set of attribbutes.
+  DataGen/1       // DataGen(S) : The medicine delivered to the patient depend on his attributes.
 
-// FIX (A): KEM-shaped, subterm-convergent, no repeated compound subterm.
-// A key issued under msk opens ciphertexts made under mpkOf(msk).
-// (Compare: kemdecaps(alg, kemencaps(alg, kemss(alg,seed), kempk(alg,sk)), sk)
-//           = kemss(alg,seed) in the KEMTLS Tamarin models.)
+// Equation for the correctness of CP-ABE scheme
 equations:
   Dec(
     KeyGen(msk, S, fix_randomness),
@@ -29,20 +30,6 @@ equations:
 
 restriction Equality:
   "All x y #i. Eq(x,y) @ #i ==> x = y"
-
-// Single authority (the Setup() action is emitted by Authority_Setup).
-restriction Single_Setup:
-  "All #i #j. Setup() @ #i & Setup() @ #j ==> #i = #j"
-
-// restriction Single_Patient_Registry:   // Only one patient registered 
-//   "All #i #j. Patient_Registry() @ #i & Patient_Registry() @ #j ==> #i = #j"
-
-restriction Single_Physician_Registry: // Only one physician registered
-  "All #i #j. Physician_Registry() @ #i & Physician_Registry() @ #j ==> #i = #j"
-
-restriction Single_Pharmacy_Registry:  // Only one pharmacy registered
-  "All #i #j. Pharmacy_Registry() @ #i & Pharmacy_Registry() @ #j ==> #i = #j"
-
 
 /* ==========================================================================
    Secure channel (reference points K and R).
@@ -92,7 +79,7 @@ rule Pharmacy_Register:
 
 rule Patients_Register:
     let
-      ID_patient = diff(~ID_patient_1, ~ID_patient_2) 
+      ID_patient = diff(~ID_patient_1, ~ID_patient_2) // Running the protocol for the two different patients
     in
     [ Fr(~ID_patient_1)
     , Fr(~ID_patient_2)
@@ -126,7 +113,7 @@ rule Physician_Request[role="Physician"]: // The physician sends the request to 
     , !Patient(Patient, ID_patient)
     , !Physician_pk(Physician, physician_pk)
     , In_Secure(Patient, Physician, <'Illness_req', Patient, ID_patient, illness>)
-    , Fr(~S)  // In reality this is a function of the illness, but we model it as a free variable.
+    , Fr(~S)
     ]
   --[ ]->
     [ Out_Secure(Physician, MA, req) ]
@@ -143,13 +130,14 @@ rule Authority_Issue[role="Authority"]: // The authority issues the credentials 
     , !Physician_pk(Physician, physician_pk)
     , !Patient(Patient, ID_patient)
     , In_Secure(Physician, MA, <'presc_req', Patient, ID_patient, S>)
+    // Compute different randomnesses, in order to have different secret keys for the two patients.
     , Fr(~randomness_1)
     , Fr(~randomness_2)
     ]
   --[ ]->
     [ Out_Secure(MA, Patient, <'credential', ABE_sk, ID_patient, S>) ]
 
-rule Patient_stores_credential[role="Patient"]: // Patient receives and stores the credential (A4: protected storage).
+rule Patient_stores_credential[role="Patient"]: // Patient receives and stores the credential.
     [ !Authority_MPK(MA, mpk)
     , !Patient(Patient, ID_patient)
     , In_Secure(MA, Patient, <'credential', ABE_sk, ID_patient, S>)
@@ -167,17 +155,12 @@ rule Patient_Handshake_request[role="Patient"]: // The patient initiates the han
     , !Pharmacy(Pharmacy, ID_pharmacy)
     ]
   --[ ]->
-    // If an attacker can modify the request in some way in order to obtain ID_patient, then a dishonest pharmacy can learn the patient 
-    // identifier without the patient explicitly revealing it.
-
-    // In this model attacker and pharmacy are the same person, so the
-    // pharmacy could modify the request in order to gain information on the
-    // Patient ID during the handshake.
     [ Out(<'hs_req', Patient, Pharmacy, req>)
     , St_Patient_Wait(Patient, Pharmacy)   // linear session state (memory of the request)
     ]
 
-rule Dishonest_Patient_Handshake_request[role="Dishonest_Patient"]: // A dishonest patient initiates the handshake with the same request of the honest one
+// A dishonest patient initiates the handshake with the same request of the honest one
+rule Dishonest_Patient_Handshake_request[role="Dishonest_Patient"]: 
     let
       req = RequestGen(diff(~Dishonest_S1, ~Dishonest_S2))
     in
@@ -205,28 +188,10 @@ rule Pharmacy_Computes_and_sends_Challenge[role="Pharmacy"]: // The pharmacy com
     ]
   --[
     ]->
-    [ Out(<'challenge', cipher, AP>) // We output in also in a non secure challenge in order let the adversary know the ciphertext
+    [ Out(<'challenge', cipher, AP>) // We output it also in a non secure challenge in order to let the adversary know the ciphertext
     , St_Pharmacy_Wait(Pharmacy, Patient, ~R, cipher, AP, data)
     ]
 
-/* --------------------------------------------------------------------------
-   FIX (B): decryption of the challenge by the HONEST patient is done by
-   PATTERN MATCHING instead of applying Dec under the old nested equation.
-
-   The premise only matches
-        In(<'challenge', Enc(mpk, AP, Resp), AP>)
-   with AP = PolicyGen(RequestGen(ABE_sk)) for the patient's OWN credential
-   and mpk the (unique) authority master public key. Binding Resp through
-   the Enc pattern IS the decryption, and it simultaneously realises the
-   original re-encryption test  Eq(Enc(mpk,AP,Resp), cipher)  by
-   construction. If the (dishonest) verifier sends a challenge under a
-   different mpk or a policy that does not match the patient's request,
-   the rule cannot fire: the honest patient aborts, exactly as before.
-
-   The Dec function and its equation remain in the theory purely as an
-   ADVERSARY capability: the curious pharmacy that obtains a revealed
-   credential can still open ciphertexts on its own.
-   -------------------------------------------------------------------------- */
 rule Patient_Decrypts_Response_and_sends_to_Pharmacy[role="Patient"]: // The patient controls if the pharmacy is honest and if so, sends the response
     let
       req          = RequestGen(S)
@@ -257,20 +222,8 @@ rule Pharmacy_checks_Response_and_sends_Data[role="Pharmacy"]: // The pharmacy v
     [ Out_Secure(Pharmacy, Patient, <'data', data>)
     ]
   
-/* ==========================================================================
-   Explicit, voluntary identity disclosure by the patient.
-   This is the ONLY rule that puts ID_patient on the wire.
-   ========================================================================== */
-// rule Reveal_sk_patient:
-//     [ !Patient_Cred(Patient, ABE_sk, ID_patient, S) ]
-//   --[ Sk_Patient_Revealed(ABE_sk, ID_patient) ]->
-//     [ Out(<ABE_sk, ID_patient>) ]
-
-// ===========================================
-// Sanity lemmas (executability)
-// ===========================================
-// Important: after changing the theory / patterns, ALWAYS re-check that the
-// protocol can still run end-to-end, otherwise all-traces lemmas may hold
-// vacuously.
-
+/* ==============================================
+   The only lemma proven is the Observational_equivalence lemma that is authomatically
+   generated by Tamarin when the file is run, proving the unlinkability.
+  ============================================= */
 end
