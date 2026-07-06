@@ -227,6 +227,7 @@ rule Pharmacy_checks_Response_and_sends_Data[role="Pharmacy"]: // The pharmacy v
     , Data_Delivered(Pharmacy, Patient, R, data) 
     ]->
     [ Out_Secure(Pharmacy, Patient, <'data', data>)
+    // Here the farmacy recives resp but since after reencryption check we are guarantied that Resp=R we don't put it in Out 
     ]
   
 /* ==========================================================================
