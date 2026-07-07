@@ -40,10 +40,11 @@ otherwise, you do can skip manual installation via docker using VsCode docker co
 
 **To run the models:**
 Open the integrated terminal in Codespaces and execute:
+
 ```bash
 # For the observational equivalence (unlinkability) model
-tamarin-prover main/Equivalence_model.spthy --prove
+tamarin-prover --diff  --prove --quit-on-warning '/workspaces/Protocols-Tramarin-Final-Project/main/Equivalence_model.spthy'
 
 # For the trace properties (anonymity/secrecy) model
-tamarin-prover main/trace_model.spthy --prove
+tamarin-prover --prove --quit-on-warning '/workspaces/Protocols-Tramarin-Final-Project/main/Trace_model.spthy'
 ```
