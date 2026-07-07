@@ -38,7 +38,7 @@ otherwise, you do can skip manual installation via docker using VsCode docker co
 5. Once the VS Code interface loads in your browser, open the `main/` directory.
 6. You can now open `Equivalence_model.spthy` or `trace_model.spthy` and use the Tamarin VS Code extension for syntax highlighting and error checking.
 
-**To run the models:**
+**To run the models:**[^1]
 Open the integrated terminal in Codespaces and execute:
 
 ```bash
@@ -48,3 +48,6 @@ tamarin-prover --diff  --prove --quit-on-warning '/workspaces/Protocols-Tramarin
 # For the trace properties (anonymity/secrecy) model
 tamarin-prover --prove --quit-on-warning '/workspaces/Protocols-Tramarin-Final-Project/main/Trace_model.spthy'
 ```
+
+
+[^1]: This code works also for russing the models in local, the only difference is you could need to build the docker container manually via the code above.
