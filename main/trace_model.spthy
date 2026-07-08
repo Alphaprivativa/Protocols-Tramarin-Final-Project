@@ -209,7 +209,7 @@ rule Patient_Decrypts_Response_and_sends_to_Pharmacy[role="Patient"]: // The pat
     in
     [ !Authority_MPK(MA, mpk)
     , !Patient_Cred(Patient, ABE_sk, ID_patient, S)
-    , In(<'challenge', cipher, AP>)
+    , In(<'challenge', cipher, AP>)  // Since this comes from an insecure channel this emulates the possibility for a pharmacy to use maliciously crafted policy and cipher
     , St_Patient_Wait(Patient, Pharmacy)
     ]
   --[ Patient_computed_response(Patient, Resp)
